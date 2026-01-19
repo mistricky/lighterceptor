@@ -2,7 +2,14 @@ import type { FetchOptions as JSDOMFetchOptions } from "jsdom";
 
 export type RequestSource = "resource" | "img" | "css" | "fetch" | "xhr";
 
-export type FetchOptions = JSDOMFetchOptions & {
+type InterceptorElement =
+  | JSDOMFetchOptions["element"]
+  | HTMLAudioElement
+  | HTMLSourceElement
+  | HTMLVideoElement;
+
+export type FetchOptions = Omit<JSDOMFetchOptions, "element"> & {
+  element?: InterceptorElement;
   source?: RequestSource;
 };
 

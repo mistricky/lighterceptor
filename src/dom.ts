@@ -14,7 +14,7 @@ export function createJSDOMWithInterceptor(options: InterceptorOptions) {
   const domOptions = options.domOptions ?? {};
   const userBeforeParse = domOptions.beforeParse;
 
-  return new JSDOM(options.html, {
+  const dom = new JSDOM(options.html, {
     ...domOptions,
     resources,
     beforeParse(window: DOMWindow) {
@@ -71,6 +71,126 @@ export function createJSDOMWithInterceptor(options: InterceptorOptions) {
         );
       };
 
+      const interceptResourceSrc = (url: string, element?: Element | null) => {
+        const iframeOrLink =
+          element instanceof window.HTMLIFrameElement
+            ? element
+            : element instanceof window.HTMLLinkElement
+              ? element
+              : undefined;
+
+        void Promise.resolve(
+          options.interceptor(url, {
+            element: iframeOrLink,
+            referrer: window.document.URL,
+            source: "resource",
+          }),
+        );
+      };
+
+      const parseSrcsetUrls = (value: string) => {
+        return value
+          .split(",")
+          .map((candidate) => candidate.trim().split(/\s+/)[0])
+          .filter((url) => url.length > 0);
+      };
+
+      const interceptSrcset = (value: string, element: Element | null) => {
+        const isImage = element instanceof window.HTMLImageElement;
+        const source = isImage ? "img" : "resource";
+
+        for (const url of parseSrcsetUrls(value)) {
+          void Promise.resolve(
+            options.interceptor(url, {
+              element: isImage ? (element as HTMLImageElement) : undefined,
+              referrer: window.document.URL,
+              source,
+            }),
+          );
+        }
+      };
+
+      const patchSrcProperty = (
+        proto: object | undefined,
+        sourceHandler: (value: string, element: Element | null) => void,
+      ) => {
+        const descriptor = proto
+          ? Object.getOwnPropertyDescriptor(proto, "src")
+          : undefined;
+        if (proto && descriptor?.set) {
+          Object.defineProperty(proto, "src", {
+            ...descriptor,
+            set(value: string) {
+              sourceHandler(String(value), this as Element);
+              descriptor.set?.call(this, value);
+            },
+          });
+        }
+      };
+
+      const patchSrcsetProperty = (proto: object | undefined) => {
+        const descriptor = proto
+          ? Object.getOwnPropertyDescriptor(proto, "srcset")
+          : undefined;
+        if (proto && descriptor?.set) {
+          Object.defineProperty(proto, "srcset", {
+            ...descriptor,
+            set(value: string) {
+              interceptSrcset(String(value), this as Element);
+              descriptor.set?.call(this, value);
+            },
+          });
+        }
+      };
+
+      const shouldInterceptLinkRel = (rel: string) => {
+        const normalized = rel.toLowerCase();
+        return (
+          normalized.includes("preload") ||
+          normalized.includes("prefetch") ||
+          normalized.includes("stylesheet") ||
+          normalized.includes("icon")
+        );
+      };
+
+      const interceptLinkHref = (link: HTMLLinkElement, rel: string) => {
+        if (shouldInterceptLinkRel(rel) && link.href) {
+          interceptResourceSrc(link.href, link);
+        }
+      };
+
+      const interceptLinkImagesrcset = (link: HTMLLinkElement) => {
+        const rel = (link.getAttribute("rel") ?? "").toLowerCase();
+        if (!rel.includes("preload")) {
+          return;
+        }
+        const imagesrcset = link.getAttribute("imagesrcset");
+        if (!imagesrcset) {
+          return;
+        }
+        for (const url of parseSrcsetUrls(imagesrcset)) {
+          interceptResourceSrc(url, link);
+        }
+      };
+
+      const patchAttributeProperty = (
+        proto: object | undefined,
+        property: string,
+        sourceHandler: (value: string, element: Element | null) => void,
+      ) => {
+        const descriptor = proto
+          ? Object.getOwnPropertyDescriptor(proto, property)
+          : undefined;
+        if (proto && descriptor?.set) {
+          Object.defineProperty(proto, property, {
+            ...descriptor,
+            set(value: string) {
+              sourceHandler(String(value), this as Element);
+              descriptor.set?.call(this, value);
+            },
+          });
+        }
+      };
       const imgProto = window.HTMLImageElement?.prototype;
       const srcDescriptor = imgProto
         ? Object.getOwnPropertyDescriptor(imgProto, "src")
@@ -86,6 +206,39 @@ export function createJSDOMWithInterceptor(options: InterceptorOptions) {
         });
       }
 
+      patchSrcsetProperty(imgProto);
+      patchSrcProperty(
+        window.HTMLIFrameElement?.prototype,
+        interceptResourceSrc,
+      );
+      patchSrcProperty(
+        window.HTMLMediaElement?.prototype,
+        interceptResourceSrc,
+      );
+      patchSrcProperty(
+        window.HTMLSourceElement?.prototype,
+        interceptResourceSrc,
+      );
+      patchSrcsetProperty(window.HTMLSourceElement?.prototype);
+      patchAttributeProperty(
+        window.HTMLVideoElement?.prototype,
+        "poster",
+        interceptResourceSrc,
+      );
+      patchAttributeProperty(
+        window.HTMLObjectElement?.prototype,
+        "data",
+        interceptResourceSrc,
+      );
+      patchSrcProperty(
+        window.HTMLTrackElement?.prototype,
+        interceptResourceSrc,
+      );
+      patchSrcProperty(
+        window.HTMLEmbedElement?.prototype,
+        interceptResourceSrc,
+      );
+
       const originalSetAttribute = window.Element.prototype.setAttribute;
       window.Element.prototype.setAttribute = function setAttribute(
         name: string,
@@ -96,6 +249,63 @@ export function createJSDOMWithInterceptor(options: InterceptorOptions) {
           name.toLowerCase() === "src"
         ) {
           interceptImgSrc(String(value), this);
+        }
+        if (
+          this instanceof window.HTMLImageElement &&
+          name.toLowerCase() === "srcset"
+        ) {
+          interceptSrcset(String(value), this);
+        }
+        if (
+          (this instanceof window.HTMLIFrameElement ||
+            this instanceof window.HTMLVideoElement ||
+            this instanceof window.HTMLAudioElement ||
+            this instanceof window.HTMLSourceElement) &&
+          name.toLowerCase() === "src"
+        ) {
+          interceptResourceSrc(String(value), this);
+        }
+        if (
+          this instanceof window.HTMLTrackElement &&
+          name.toLowerCase() === "src"
+        ) {
+          interceptResourceSrc(String(value), this);
+        }
+        if (
+          this instanceof window.HTMLEmbedElement &&
+          name.toLowerCase() === "src"
+        ) {
+          interceptResourceSrc(String(value), this);
+        }
+        if (
+          this instanceof window.HTMLObjectElement &&
+          name.toLowerCase() === "data"
+        ) {
+          interceptResourceSrc(String(value), this);
+        }
+        if (
+          this instanceof window.HTMLVideoElement &&
+          name.toLowerCase() === "poster"
+        ) {
+          interceptResourceSrc(String(value), this);
+        }
+        if (this instanceof window.HTMLSourceElement && name === "srcset") {
+          interceptSrcset(String(value), this);
+        }
+        if (this instanceof window.HTMLLinkElement) {
+          const lowerName = name.toLowerCase();
+          if (lowerName === "href") {
+            const rel = (this.getAttribute("rel") ?? "").toLowerCase();
+            interceptLinkHref(this, rel);
+          }
+          if (lowerName === "rel") {
+            const rel = String(value).toLowerCase();
+            interceptLinkHref(this, rel);
+            interceptLinkImagesrcset(this);
+          }
+          if (lowerName === "imagesrcset") {
+            interceptLinkImagesrcset(this);
+          }
         }
         if (name.toLowerCase() === "style") {
           interceptCssText(String(value));
@@ -219,5 +429,144 @@ export function createJSDOMWithInterceptor(options: InterceptorOptions) {
         };
       }
     },
+  });
+
+  scanDocumentRequests(dom.window, options.interceptor);
+
+  return dom;
+}
+
+function scanDocumentRequests(
+  window: DOMWindow,
+  interceptor: RequestInterceptor,
+) {
+  const { document } = window;
+  const referrer = document.URL;
+
+  const record = (
+    url: string,
+    source: "resource" | "img",
+    element?: HTMLImageElement | HTMLIFrameElement | HTMLLinkElement,
+  ) => {
+    void Promise.resolve(
+      interceptor(url, {
+        element,
+        referrer,
+        source,
+      }),
+    );
+  };
+
+  const parseSrcsetUrls = (value: string) => {
+    return value
+      .split(",")
+      .map((candidate) => candidate.trim().split(/\s+/)[0])
+      .filter((url) => url.length > 0);
+  };
+
+  const shouldInterceptLinkRel = (rel: string) => {
+    const normalized = rel.toLowerCase();
+    return (
+      normalized.includes("preload") ||
+      normalized.includes("prefetch") ||
+      normalized.includes("stylesheet") ||
+      normalized.includes("icon")
+    );
+  };
+
+  document.querySelectorAll("img[src]").forEach((img) => {
+    if (img instanceof window.HTMLImageElement && img.src) {
+      record(img.src, "img", img);
+    }
+  });
+
+  document.querySelectorAll("img[srcset]").forEach((img) => {
+    if (img instanceof window.HTMLImageElement) {
+      for (const url of parseSrcsetUrls(img.getAttribute("srcset") ?? "")) {
+        record(url, "img", img);
+      }
+    }
+  });
+
+  document.querySelectorAll("source[src]").forEach((source) => {
+    const src = source.getAttribute("src");
+    if (src) {
+      record(src, "resource");
+    }
+  });
+
+  document.querySelectorAll("source[srcset]").forEach((source) => {
+    const srcset = source.getAttribute("srcset");
+    if (srcset) {
+      for (const url of parseSrcsetUrls(srcset)) {
+        record(url, "resource");
+      }
+    }
+  });
+
+  document.querySelectorAll("script[src]").forEach((script) => {
+    if (script instanceof window.HTMLScriptElement && script.src) {
+      record(script.src, "resource");
+    }
+  });
+
+  document.querySelectorAll("iframe[src]").forEach((iframe) => {
+    if (iframe instanceof window.HTMLIFrameElement && iframe.src) {
+      record(iframe.src, "resource", iframe);
+    }
+  });
+
+  document.querySelectorAll("video[src], audio[src]").forEach((media) => {
+    const src = media.getAttribute("src");
+    if (src) {
+      record(src, "resource");
+    }
+  });
+
+  document.querySelectorAll("video[poster]").forEach((video) => {
+    const poster = video.getAttribute("poster");
+    if (poster) {
+      record(poster, "resource");
+    }
+  });
+
+  document.querySelectorAll("track[src]").forEach((track) => {
+    const src = track.getAttribute("src");
+    if (src) {
+      record(src, "resource");
+    }
+  });
+
+  document.querySelectorAll("embed[src]").forEach((embed) => {
+    const src = embed.getAttribute("src");
+    if (src) {
+      record(src, "resource");
+    }
+  });
+
+  document.querySelectorAll("object[data]").forEach((object) => {
+    const data = object.getAttribute("data");
+    if (data) {
+      record(data, "resource");
+    }
+  });
+
+  document.querySelectorAll("link[rel][href]").forEach((link) => {
+    if (!(link instanceof window.HTMLLinkElement)) {
+      return;
+    }
+    const rel = link.getAttribute("rel") ?? "";
+    if (shouldInterceptLinkRel(rel)) {
+      record(link.href, "resource", link);
+    }
+
+    if (rel.toLowerCase().includes("preload")) {
+      const imagesrcset = link.getAttribute("imagesrcset");
+      if (imagesrcset) {
+        for (const url of parseSrcsetUrls(imagesrcset)) {
+          record(url, "resource", link);
+        }
+      }
+    }
   });
 }

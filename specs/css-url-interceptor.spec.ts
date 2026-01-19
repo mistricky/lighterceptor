@@ -33,6 +33,55 @@ describe("css url interception", () => {
     expect(seen).toContain("https://example.com/bg.png");
   });
 
+  it("intercepts urls from cssText updates", async () => {
+    const seen: string[] = [];
+
+    const dom = createJSDOMWithInterceptor({
+      html: `<body></body>`,
+      domOptions: {
+        pretendToBeVisual: true,
+      },
+      interceptor: (url) => {
+        seen.push(url);
+        return Buffer.from("");
+      },
+    });
+
+    const div = dom.window.document.createElement("div");
+    div.style.cssText = "background: url(https://example.com/css-text.png);";
+    dom.window.document.body.appendChild(div);
+
+    await wait(50);
+
+    expect(seen).toContain("https://example.com/css-text.png");
+  });
+
+  it("intercepts urls from style.setProperty", async () => {
+    const seen: string[] = [];
+
+    const dom = createJSDOMWithInterceptor({
+      html: `<body></body>`,
+      domOptions: {
+        pretendToBeVisual: true,
+      },
+      interceptor: (url) => {
+        seen.push(url);
+        return Buffer.from("");
+      },
+    });
+
+    const div = dom.window.document.createElement("div");
+    div.style.setProperty(
+      "background-image",
+      "url(https://example.com/set-prop.png)",
+    );
+    dom.window.document.body.appendChild(div);
+
+    await wait(50);
+
+    expect(seen).toContain("https://example.com/set-prop.png");
+  });
+
   it("intercepts urls from style tag content", async () => {
     const seen: string[] = [];
 

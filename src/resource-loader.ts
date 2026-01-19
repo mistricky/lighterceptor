@@ -1,4 +1,8 @@
-import { ResourceLoader, type AbortablePromise } from "jsdom";
+import {
+  ResourceLoader,
+  type AbortablePromise,
+  type FetchOptions as JSDOMFetchOptions,
+} from "jsdom";
 
 import type { FetchOptions, RequestInterceptor } from "./types";
 
@@ -17,7 +21,13 @@ export class InterceptingResourceLoader extends ResourceLoader {
       this.interceptor(url, { ...options, source: "resource" }),
     ).then((result) => {
       if (result === null || result === undefined) {
-        fallback = super.fetch(url, options);
+        const jsdomOptions: JSDOMFetchOptions = {
+          ...options,
+          element: isJSDOMFetchElement(options.element)
+            ? options.element
+            : undefined,
+        };
+        fallback = super.fetch(url, jsdomOptions);
         return fallback ?? Buffer.from("");
       }
 
@@ -41,4 +51,16 @@ export class InterceptingResourceLoader extends ResourceLoader {
 
     return abortable;
   }
+}
+
+function isJSDOMFetchElement(
+  element: FetchOptions["element"],
+): element is JSDOMFetchOptions["element"] {
+  return (
+    element instanceof HTMLImageElement ||
+    element instanceof HTMLIFrameElement ||
+    element instanceof HTMLLinkElement ||
+    element instanceof HTMLScriptElement ||
+    element === undefined
+  );
 }
