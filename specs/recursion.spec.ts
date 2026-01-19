@@ -138,4 +138,25 @@ describe("Lighterceptor recursion", () => {
     expect(urls).toContain("https://example.com/bg.png");
     expect(urls).toContain("https://example.com/nested.png");
   });
+
+  it("follows script src and fetch from fetched js", async () => {
+    const resources = new Map<string, MockEntry>([
+      [
+        "http://foo/bar",
+        {
+          body: 'fetch("http://bar")',
+          contentType: "application/javascript",
+        },
+      ],
+    ]);
+
+    vi.stubGlobal("fetch", createFetchStub(resources));
+
+    const html = `<html><script src="http://foo/bar"></script></html>`;
+    const result = await new Lighterceptor(html, { recursion: true }).run();
+
+    const urls = result.requests.map((item) => item.url);
+    expect(urls).toContain("http://foo/bar");
+    expect(urls.some((url) => url.startsWith("http://bar"))).toBe(true);
+  });
 });
