@@ -296,7 +296,9 @@ export function createJSDOMWithInterceptor(options: InterceptorOptions) {
           const lowerName = name.toLowerCase();
           if (lowerName === "href") {
             const rel = (this.getAttribute("rel") ?? "").toLowerCase();
-            interceptLinkHref(this, rel);
+            if (shouldInterceptLinkRel(rel)) {
+              interceptResourceSrc(String(value), this);
+            }
           }
           if (lowerName === "rel") {
             const rel = String(value).toLowerCase();
@@ -551,13 +553,16 @@ function scanDocumentRequests(
     }
   });
 
-  document.querySelectorAll("link[rel][href]").forEach((link) => {
+  document.querySelectorAll("link[rel]").forEach((link) => {
     if (!(link instanceof window.HTMLLinkElement)) {
       return;
     }
     const rel = link.getAttribute("rel") ?? "";
     if (shouldInterceptLinkRel(rel)) {
-      record(link.href, "resource", link);
+      const href = link.getAttribute("href") ?? link.href;
+      if (href) {
+        record(href, "resource", link);
+      }
     }
 
     if (rel.toLowerCase().includes("preload")) {
