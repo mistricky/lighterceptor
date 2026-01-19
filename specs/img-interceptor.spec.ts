@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createJSDOMWithInterceptor } from "../src/index.js";
+import { createJSDOMWithInterceptor } from "../src/index";
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));

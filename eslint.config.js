@@ -32,6 +32,7 @@ export default [
       "unused-imports": unusedImports,
     },
     rules: {
+      "no-undef": "off",
       "no-unused-vars": "off",
       "curly": ["error", "all"],
       "eqeqeq": ["error", "always"],
